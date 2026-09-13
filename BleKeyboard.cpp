@@ -1,5 +1,6 @@
 #include "BleKeyboard.h"
 #include "HIDTypes.h"
+#include <BLEDescriptor.h>
 #include <algorithm>
 #include <cstring>
 
@@ -7,6 +8,29 @@
 #define MID 2
 #define MOID 3
 static const uint8_t keyboardMap[] PROGMEM={USAGE_PAGE(1),1,USAGE(1),6,COLLECTION(1),1,REPORT_ID(1),KID,USAGE_PAGE(1),7,USAGE_MINIMUM(1),0xe0,USAGE_MAXIMUM(1),0xe7,LOGICAL_MINIMUM(1),0,LOGICAL_MAXIMUM(1),1,REPORT_SIZE(1),1,REPORT_COUNT(1),8,HIDINPUT(1),2,REPORT_COUNT(1),1,REPORT_SIZE(1),8,HIDINPUT(1),1,REPORT_COUNT(1),6,REPORT_SIZE(1),8,LOGICAL_MINIMUM(1),0,LOGICAL_MAXIMUM(1),0x65,USAGE_MINIMUM(1),0,USAGE_MAXIMUM(1),0x65,HIDINPUT(1),0,END_COLLECTION(0),USAGE_PAGE(1),0x0c,USAGE(1),1,COLLECTION(1),1,REPORT_ID(1),MID,USAGE_PAGE(1),0x0c,USAGE_MINIMUM(1),0,USAGE_MAXIMUM(1),1,REPORT_SIZE(1),1,REPORT_COUNT(1),16,USAGE(1),0xb5,USAGE(1),0xb6,USAGE(1),0xb7,USAGE(1),0xcd,USAGE(1),0xe2,USAGE(1),0xe9,USAGE(1),0xea,USAGE(2),0x23,2,USAGE(2),0x94,1,USAGE(2),0x92,1,USAGE(2),0x2a,2,USAGE(2),0x21,2,USAGE(2),0x26,2,USAGE(2),0x24,2,USAGE(2),0x83,1,USAGE(2),0x8a,1,HIDINPUT(1),2,END_COLLECTION(0)};
+// Windows expects the output report and LED usages to match the HID descriptor.
+static const uint8_t windowsKeyboardMap[] PROGMEM = {
+  USAGE_PAGE(1), 1, USAGE(1), 6, COLLECTION(1), 1,
+  REPORT_ID(1), KID, USAGE_PAGE(1), 7, USAGE_MINIMUM(1), 0xe0,
+  USAGE_MAXIMUM(1), 0xe7, LOGICAL_MINIMUM(1), 0, LOGICAL_MAXIMUM(1), 1,
+  REPORT_SIZE(1), 1, REPORT_COUNT(1), 8, HIDINPUT(1), 2,
+  REPORT_COUNT(1), 1, REPORT_SIZE(1), 8, HIDINPUT(1), 1,
+  REPORT_COUNT(1), 5, REPORT_SIZE(1), 1, USAGE_PAGE(1), 8,
+  USAGE_MINIMUM(1), 1, USAGE_MAXIMUM(1), 5, HIDOUTPUT(1), 2,
+  REPORT_COUNT(1), 1, REPORT_SIZE(1), 3, HIDOUTPUT(1), 1,
+  REPORT_COUNT(1), 6, REPORT_SIZE(1), 8, LOGICAL_MINIMUM(1), 0,
+  LOGICAL_MAXIMUM(1), 0x65, USAGE_PAGE(1), 7, USAGE_MINIMUM(1), 0,
+  USAGE_MAXIMUM(1), 0x65, HIDINPUT(1), 0, END_COLLECTION(0),
+  USAGE_PAGE(1), 0x0c, USAGE(1), 1, COLLECTION(1), 1,
+  REPORT_ID(1), MID, USAGE_PAGE(1), 0x0c, USAGE_MINIMUM(1), 0,
+  USAGE_MAXIMUM(1), 1, REPORT_SIZE(1), 1, REPORT_COUNT(1), 16,
+  USAGE(1), 0xb5, USAGE(1), 0xb6, USAGE(1), 0xb7, USAGE(1), 0xcd,
+  USAGE(1), 0xe2, USAGE(1), 0xe9, USAGE(1), 0xea, USAGE(2), 0x23, 2,
+  USAGE(2), 0x94, 1, USAGE(2), 0x92, 1, USAGE(2), 0x2a, 2,
+  USAGE(2), 0x21, 2, USAGE(2), 0x26, 2, USAGE(2), 0x24, 2,
+  USAGE(2), 0x83, 1, USAGE(2), 0x8a, 1, HIDINPUT(1), 2,
+  END_COLLECTION(0)
+};
 static const uint8_t compositeMap[] PROGMEM = {
 #include "composite_descriptor.inc"
 };
@@ -35,6 +59,41 @@ static void configureSecurity() {
   security.setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
 }
 
+static void clearBondStore() {
+#if defined(CONFIG_BLUEDROID_ENABLED)
+  int count = esp_ble_get_bond_device_num();
+  if (count <= 0) return;
+  esp_ble_bond_dev_t* devices = static_cast<esp_ble_bond_dev_t*>(
+      malloc(sizeof(esp_ble_bond_dev_t) * count));
+  if (!devices) return;
+  if (esp_ble_get_bond_device_list(&count, devices) == ESP_OK) {
+    for (int i = 0; i < count; ++i) {
+      esp_ble_remove_bond_device(devices[i].bd_addr);
+    }
+
+  }
+  free(devices);
+#endif
+}
+
+static BLECharacteristic* createReportCharacteristic(BLEHIDDevice* hid,
+                                                      uint8_t reportId) {
+  BLEService* service = hid ? hid->hidService() : nullptr;
+  if (!service) return nullptr;
+  const uint32_t properties = BLECharacteristic::PROPERTY_READ |
+                              BLECharacteristic::PROPERTY_WRITE |
+                              BLECharacteristic::PROPERTY_WRITE_NR |
+                              BLECharacteristic::PROPERTY_NOTIFY;
+  BLECharacteristic* report =
+      service->createCharacteristic((uint16_t)0x2a4d, properties);
+  if (!report) return nullptr;
+  BLEDescriptor* reference = new BLEDescriptor(BLEUUID((uint16_t)0x2908));
+  uint8_t value[] = {reportId, 0x01};
+  reference->setValue(value, sizeof(value));
+  report->addDescriptor(reference);
+  return report;
+}
+
 BleKeyboard::BleKeyboard(std::string n, std::string m, uint8_t b)
     : name(n.substr(0, 15)), manufacturer(m.substr(0, 15)), battery(std::min<uint8_t>(b, 100)) {}
 
@@ -43,15 +102,26 @@ void BleKeyboard::setup(const uint8_t* map, size_t length, uint16_t appearance) 
   BLEDevice::init(String(name.c_str()));
   BLEServer* server = BLEDevice::createServer();
   if (!server) { core.setError(HidStatus::BluetoothUnavailable); core.endGuard(); return; }
+  core.setServer(server);
   server->setCallbacks(this);
   hid = new BLEHIDDevice(server);
-  keyboard = hid->inputReport(KID);
-  output = hid->outputReport(KID);
-  media = hid->inputReport(MID);
+  // Use one report characteristic: NimBLE detaches duplicate 0x2A4D objects.
+  keyboard = createReportCharacteristic(hid, KID);
+  output = keyboard;
+  media = keyboard;
+  if (!keyboard) {
+    core.setError(HidStatus::BluetoothUnavailable);
+    core.endGuard();
+    return;
+  }
   output->setCallbacks(this);
   hid->manufacturer()->setValue(String(manufacturer.c_str()));
   hid->pnp(2, vid, pid, version);
   hid->hidInfo(0, 1);
+  if (BLECharacteristic* protocol = hid->protocolMode()) {
+    uint8_t reportProtocol = 1;
+    protocol->setValue(&reportProtocol, sizeof(reportProtocol));
+  }
   if (core.configuration().securityEnabled) configureSecurity();
   hid->reportMap((uint8_t*)map, length);
   hid->startServices();
@@ -64,7 +134,7 @@ void BleKeyboard::setup(const uint8_t* map, size_t length, uint16_t appearance) 
   hid->setBatteryLevel(battery);
 }
 
-void BleKeyboard::begin() { setup(keyboardMap, sizeof(keyboardMap), HID_KEYBOARD); }
+void BleKeyboard::begin() { setup(windowsKeyboardMap, sizeof(windowsKeyboardMap), HID_KEYBOARD); }
 void BleKeyboard::end() {
   if (!core.started()) { core.setError(HidStatus::NotStarted); return; }
   if (advertising) advertising->stop();
@@ -81,6 +151,9 @@ void BleKeyboard::setSecurityEnabled(bool enabled) { core.configuration().securi
 void BleKeyboard::setAdvertisingInterval(uint16_t min, uint16_t max) { core.configuration().advertisingMinInterval = min; core.configuration().advertisingMaxInterval = max; }
 void BleKeyboard::setBatteryLevel(uint8_t level) { battery = std::min<uint8_t>(level, 100); if (hid) hid->setBatteryLevel(battery); }
 void BleKeyboard::setName(std::string n) { name = n.substr(0, 15); }
+void BleKeyboard::clearBonds() {
+  clearBondStore();
+}
 void BleKeyboard::set_vendor_id(uint16_t value) { vid = value; }
 void BleKeyboard::set_product_id(uint16_t value) { pid = value; }
 void BleKeyboard::set_version(uint16_t value) { version = value; }
@@ -116,6 +189,13 @@ void BleKeyboard::releaseAll() {
     sendReport(&mediaReport);
   }
 }
+void BleKeyboard::scheduleReleaseAll() {
+  core.defer([this]() {
+    if (core.started() && core.connected()) {
+      releaseAll();
+    }
+  }, 200);
+}
 size_t BleKeyboard::write(uint8_t value) {
   size_t result = press(value);
   release(value);
@@ -137,13 +217,18 @@ size_t BleKeyboard::write(const uint8_t* buffer, size_t size) {
 void BleKeyboard::onConnect(BLEServer*) {
   core.setConnected(true);
   core.setRestartPending(false);
-  releaseAll();
+  // Windows may finish HID service discovery after the connect callback.
+  scheduleReleaseAll();
 }
 void BleKeyboard::onDisconnect(BLEServer*) {
   core.setConnected(false);
   if (advertising && core.started() && !core.takeRestartPending()) {
     core.setRestartPending(true);
-    advertising->start();
+    core.defer([this]() {
+      if (advertising && core.started() && !core.connected()) {
+        advertising->start();
+      }
+    }, 200);
   }
 }
 void BleKeyboard::onWrite(BLECharacteristic* characteristic) {
@@ -162,7 +247,7 @@ void BleMouse::begin() {
   if (core.beginGuard() != HidStatus::Ok) return;
   BLEDevice::init(String(name.c_str())); BLEServer* server = BLEDevice::createServer();
   if (!server) { core.setError(HidStatus::BluetoothUnavailable); core.endGuard(); return; }
-  server->setCallbacks(this); hid = new BLEHIDDevice(server); input = hid->inputReport(MOID);
+  server->setCallbacks(this); core.setServer(server); hid = new BLEHIDDevice(server); input = hid->inputReport(MOID);
   hid->manufacturer()->setValue(String(manufacturer.c_str())); hid->pnp(2, 0x05ac, 0x820b, 0x0210); hid->hidInfo(0, 1);
   if (core.configuration().securityEnabled) configureSecurity(); hid->reportMap((uint8_t*)mouseMap, sizeof(mouseMap)); hid->startServices();
   advertising = server->getAdvertising(); advertising->setAppearance(HID_MOUSE); advertising->addServiceUUID(hid->hidService()->getUUID()); advertising->setScanResponse(false); core.configureAdvertising(advertising); advertising->start(); hid->setBatteryLevel(battery);
@@ -173,17 +258,44 @@ void BleMouse::clearError() { core.clearError(); }
 void BleMouse::setLogging(bool enabled) { core.setLogging(enabled); } void BleMouse::setReportDelay(uint32_t d) { core.configuration().reportDelayMs = d; }
 void BleMouse::setSecurityEnabled(bool enabled) { core.configuration().securityEnabled = enabled; } void BleMouse::setAdvertisingInterval(uint16_t min, uint16_t max) { core.configuration().advertisingMinInterval = min; core.configuration().advertisingMaxInterval = max; }
 void BleMouse::setBatteryLevel(uint8_t level) { battery = std::min<uint8_t>(level, 100); if (hid) hid->setBatteryLevel(battery); } void BleMouse::setName(std::string n) { name = n.substr(0, 15); }
+void BleMouse::clearBonds() { clearBondStore(); }
 bool BleMouse::notify() { return core.notify(input, (uint8_t*)&report, sizeof(report)); }
 void BleMouse::move(signed char x, signed char y, signed char wheel, signed char hWheel) { report.x=x; report.y=y; report.wheel=wheel; report.hWheel=hWheel; notify(); report.x=report.y=report.wheel=report.hWheel=0; }
 void BleMouse::scrollUp(signed char a) { move(0,0,a,0); } void BleMouse::scrollDown(signed char a) { move(0,0,-a,0); } void BleMouse::scrollLeft(signed char a) { move(0,0,0,-a); } void BleMouse::scrollRight(signed char a) { move(0,0,0,a); }
 void BleMouse::click(uint8_t b) { press(b); release(b); } void BleMouse::press(uint8_t b) { report.buttons |= b & 0x1f; notify(); } void BleMouse::release(uint8_t b) { report.buttons &= ~(b & 0x1f); notify(); } void BleMouse::releaseAll() { report.buttons=0; notify(); }
-void BleMouse::onConnect(BLEServer*) { core.setConnected(true); core.setRestartPending(false); releaseAll(); } void BleMouse::onDisconnect(BLEServer*) { core.setConnected(false); if (advertising && core.started() && !core.takeRestartPending()) { core.setRestartPending(true); advertising->start(); } }
+void BleMouse::onConnect(BLEServer*) {
+  core.setConnected(true);
+  core.setRestartPending(false);
+  scheduleReleaseAll();
+}
+void BleMouse::onDisconnect(BLEServer*) {
+  core.setConnected(false);
+  if (advertising && core.started() && !core.takeRestartPending()) {
+    core.setRestartPending(true);
+    core.defer([this]() {
+      if (advertising && core.started() && !core.connected()) {
+        advertising->start();
+      }
+    }, 200);
+  }
+}
+void BleMouse::scheduleReleaseAll() {
+  core.defer([this]() {
+    if (core.started() && core.connected()) {
+      releaseAll();
+    }
+  }, 200);
+}
 
 BleComposite::BleComposite(std::string n, std::string m, uint8_t b) : BleKeyboard(n, m, b) {}
 void BleComposite::begin() {
   if (core.beginGuard() != HidStatus::Ok) return;
   BLEDevice::init(String(name.c_str())); BLEServer* server = BLEDevice::createServer(); if (!server) { core.setError(HidStatus::BluetoothUnavailable); core.endGuard(); return; }
-  server->setCallbacks(this); hid = new BLEHIDDevice(server); keyboard=hid->inputReport(KID); output=hid->outputReport(KID); media=hid->inputReport(MID); mouseInput=hid->inputReport(MOID); output->setCallbacks(this);
+  server->setCallbacks(this); core.setServer(server); hid = new BLEHIDDevice(server); keyboard=createReportCharacteristic(hid, KID); output=keyboard; media=keyboard; mouseInput=keyboard; if (!keyboard) { core.setError(HidStatus::BluetoothUnavailable); core.endGuard(); return; } output->setCallbacks(this);
+  if (BLECharacteristic* protocol = hid->protocolMode()) {
+    uint8_t reportProtocol = 1;
+    protocol->setValue(&reportProtocol, sizeof(reportProtocol));
+  }
   hid->manufacturer()->setValue(String(manufacturer.c_str())); hid->pnp(2, vid, pid, version); hid->hidInfo(0,1); if (core.configuration().securityEnabled) configureSecurity();
   hid->reportMap((uint8_t*)compositeMap, sizeof(compositeMap)); hid->startServices(); advertising=server->getAdvertising(); advertising->setAppearance(HID_KEYBOARD); advertising->addServiceUUID(hid->hidService()->getUUID()); advertising->setScanResponse(false); core.configureAdvertising(advertising); advertising->start(); hid->setBatteryLevel(battery);
 }

@@ -93,6 +93,7 @@ class BleKeyboard : public Print,
   void setBatteryLevel(uint8_t level);
   void updateBattery(uint8_t level) { setBatteryLevel(level); }
   void setName(std::string name);
+  void clearBonds();
   void setDelay(uint32_t delayMs) { setReportDelay(delayMs); }
   void set_vendor_id(uint16_t value);
   void set_product_id(uint16_t value);
@@ -134,6 +135,7 @@ class BleKeyboard : public Print,
               size_t length);
   HidLedCallback ledCallback;
   uint8_t ledStateValue = 0;
+  void scheduleReleaseAll();
 };
 
 static constexpr uint8_t MOUSE_LEFT = 1;
@@ -166,6 +168,7 @@ class BleMouse : public Print, public BLEServerCallbacks {
   void setBatteryLevel(uint8_t level);
   void updateBattery(uint8_t level) { setBatteryLevel(level); }
   void setName(std::string name);
+  void clearBonds();
   void click(uint8_t button = MOUSE_LEFT);
   void move(signed char x, signed char y, signed char wheel = 0,
             signed char hWheel = 0);
@@ -190,6 +193,7 @@ class BleMouse : public Print, public BLEServerCallbacks {
   uint8_t battery;
   HidCore core;
   bool notify();
+  void scheduleReleaseAll();
 };
 
 class BleComposite : public BleKeyboard {

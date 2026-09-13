@@ -3,8 +3,13 @@
 #include <Arduino.h>
 #include <BLEAdvertising.h>
 #include <BLECharacteristic.h>
+#include <BLEServer.h>
+#include <BLEService.h>
 
 #include <functional>
+#include <utility>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 enum class HidStatus : uint8_t {
   Ok = 0,
@@ -40,11 +45,13 @@ class HidCore {
     started_ = false;
     connected_ = false;
     restartPending_ = false;
+    server_ = nullptr;
   }
 
   bool started() const { return started_; }
   bool connected() const { return connected_; }
   void setConnected(bool connected) { connected_ = connected; }
+  void setServer(BLEServer* server) { server_ = server; }
 
   HidStatus lastError() const { return lastError_; }
   void clearError() { lastError_ = HidStatus::Ok; }
@@ -81,13 +88,29 @@ class HidCore {
       setError(HidStatus::InvalidArgument);
       return false;
     }
+    if (server_ == nullptr || server_->getConnectedCount() == 0) {
+      setError(HidStatus::NotConnected);
+      return false;
+    }
     characteristic->setValue(data, length);
     characteristic->notify();
     if (configuration_.reportDelayMs != 0) {
-      delay(configuration_.reportDelayMs);
+      vTaskDelay(pdMS_TO_TICKS(configuration_.reportDelayMs));
     }
     setError(HidStatus::Ok);
     return true;
+  }
+
+  void defer(std::function<void()> callback, uint32_t delayMs) {
+    if (!callback) {
+      return;
+    }
+    DeferredWork* work = new DeferredWork{std::move(callback), delayMs};
+    if (xTaskCreate(&HidCore::runDeferred, "ible_hid", 3072, work, 1,
+                    nullptr) != pdPASS) {
+      delete work;
+      setError(HidStatus::NotifyFailed);
+    }
   }
 
   void configureAdvertising(BLEAdvertising* advertising) const {
@@ -103,10 +126,26 @@ class HidCore {
   }
 
  private:
+  struct DeferredWork {
+    std::function<void()> callback;
+    uint32_t delayMs;
+  };
+
+  static void runDeferred(void* argument) {
+    DeferredWork* work = static_cast<DeferredWork*>(argument);
+    if (work->delayMs != 0) {
+      vTaskDelay(pdMS_TO_TICKS(work->delayMs));
+    }
+    work->callback();
+    delete work;
+    vTaskDelete(nullptr);
+  }
+
   HidConfiguration configuration_;
   HidStatus lastError_ = HidStatus::Ok;
   bool started_ = false;
   bool connected_ = false;
   bool loggingEnabled_ = false;
   bool restartPending_ = false;
+  BLEServer* server_ = nullptr;
 };

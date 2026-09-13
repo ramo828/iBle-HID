@@ -31,6 +31,7 @@ public:
   void setDpad(uint8_t direction) { setHat(direction); }
   void setBatteryLevel(uint8_t level);
   void setName(std::string name);
+  void clearBonds();
 
 protected:
   void onConnect(BLEServer*) override;
@@ -49,4 +50,5 @@ private:
   uint8_t battery;
   HidCore core;
   void notify();
+  void scheduleReleaseAll();
 };

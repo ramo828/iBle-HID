@@ -38,7 +38,7 @@ before `begin()` to tune production deployments.
 
 `BleKeyboard` supports `print`, `println`, `write`, `press`, `release`,
 `releaseAll`, media key constants, `isConnected`, `setBatteryLevel`, `setName`,
-`setDelay`, and VID/PID/version setters. Register an output-report callback
+`setDelay`, `clearBonds`, and VID/PID/version setters. Register an output-report callback
 with `onLedState()` to receive Num Lock, Caps Lock, and Scroll Lock state.
 `BleMouse` (include
 `<BleMouse.h>`) provides `move(x,y,wheel,hWheel)`, `scrollUp`, `scrollDown`,
@@ -74,8 +74,11 @@ disconnect.
   folder is in the Arduino libraries directory.
 * **Compile errors:** use Arduino-ESP32 3.3.11, select an ESP32 target, and
   remove duplicate copies of this library or incompatible BLE libraries.
-* **Pairing problems:** forget the device on both sides and reset the board;
-  this library uses bonded Just Works pairing without a passkey.
+* **Pairing problems:** call `clearBonds()` before `begin()` when the host has
+  stale pairing data, then forget the device on the host and reset the board.
+  The library uses bonded Just Works pairing without a passkey. Advertising
+  restarts from deferred work after disconnect, rather than from the BLE
+  callback, to avoid reconnect loops.
 
 ## Advanced configuration
 

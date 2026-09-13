@@ -43,12 +43,17 @@ void BleGamepad::begin() {
     core.endGuard();
     return;
   }
+  core.setServer(server);
   server->setCallbacks(this);
   hid = new BLEHIDDevice(server);
   input = hid->inputReport(4);
   hid->manufacturer()->setValue(String(manufacturer.c_str()));
   hid->pnp(2, 0x05AC, 0x820C, 0x0210);
   hid->hidInfo(0, 1);
+  if (BLECharacteristic* protocol = hid->protocolMode()) {
+    uint8_t reportProtocol = 1;
+    protocol->setValue(&reportProtocol, sizeof(reportProtocol));
+  }
   if (core.configuration().securityEnabled) {
     configureSecurity();
   }
@@ -99,6 +104,21 @@ void BleGamepad::setBatteryLevel(uint8_t level) {
 }
 
 void BleGamepad::setName(std::string n) { name = n.substr(0, 15); }
+void BleGamepad::clearBonds() {
+#if defined(CONFIG_BLUEDROID_ENABLED)
+  int count = esp_ble_get_bond_device_num();
+  if (count <= 0) return;
+  esp_ble_bond_dev_t* devices = static_cast<esp_ble_bond_dev_t*>(
+      malloc(sizeof(esp_ble_bond_dev_t) * count));
+  if (!devices) return;
+  if (esp_ble_get_bond_device_list(&count, devices) == ESP_OK) {
+    for (int i = 0; i < count; ++i) {
+      esp_ble_remove_bond_device(devices[i].bd_addr);
+    }
+  }
+  free(devices);
+#endif
+}
 
 void BleGamepad::press(uint8_t button) {
   if (button < 1 || button > 16) {
@@ -163,13 +183,26 @@ void BleGamepad::notify() {
 void BleGamepad::onConnect(BLEServer*) {
   core.setConnected(true);
   core.setRestartPending(false);
-  releaseAll();
+  // Delay the first report until Windows has completed HID discovery.
+  scheduleReleaseAll();
 }
 
 void BleGamepad::onDisconnect(BLEServer*) {
   core.setConnected(false);
   if (advertising && core.started() && !core.takeRestartPending()) {
     core.setRestartPending(true);
-    advertising->start();
+    core.defer([this]() {
+      if (advertising && core.started() && !core.connected()) {
+        advertising->start();
+      }
+    }, 200);
   }
+}
+
+void BleGamepad::scheduleReleaseAll() {
+  core.defer([this]() {
+    if (core.started() && core.connected()) {
+      releaseAll();
+    }
+  }, 200);
 }
