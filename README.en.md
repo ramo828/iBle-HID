@@ -29,9 +29,18 @@ void loop() {
 
 ## API
 
+All devices expose `lastError()` and `clearError()` using `HidStatus`, plus
+`setLogging(bool)`, guarded idempotent `begin()`/`end()`, and
+`updateBattery(0..100)`. Reports attempted while disconnected return
+`HidStatus::NotConnected` instead of failing silently. `setReportDelay()`,
+`setSecurityEnabled()`, and `setAdvertisingInterval(min, max)` can be used
+before `begin()` to tune production deployments.
+
 `BleKeyboard` supports `print`, `println`, `write`, `press`, `release`,
 `releaseAll`, media key constants, `isConnected`, `setBatteryLevel`, `setName`,
-`setDelay`, and VID/PID/version setters. `BleMouse` (include
+`setDelay`, and VID/PID/version setters. Register an output-report callback
+with `onLedState()` to receive Num Lock, Caps Lock, and Scroll Lock state.
+`BleMouse` (include
 `<BleMouse.h>`) provides `move(x,y,wheel,hWheel)`, `scrollUp`, `scrollDown`,
 `scrollLeft`, `scrollRight`, `click`, `press`, `release`, `releaseAll`,
 battery, name, and connection methods. Scroll amounts default to one HID
@@ -50,8 +59,9 @@ keys, keypad keys, and media keys.
 ## Examples
 
 BasicKeyboard, FullKeyboard, MediaKeys, Mouse, DirectionalScrolling,
-RotaryEncoderScroll, MPU6050MotionMouse, Composite, Diagnostic, Gamepad, and
-AdvancedControls are included. Pair the board in the host's
+RotaryEncoderScroll, MPU6050MotionMouse, Composite, Diagnostic, Gamepad,
+AdvancedControls, AdvancedConfiguration, ErrorHandling, and KeyboardLeds are
+included. Pair the board in the host's
 Bluetooth settings; sketches automatically restart advertising after a
 disconnect.
 

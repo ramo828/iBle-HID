@@ -4,6 +4,7 @@
 #include <string>
 #include <BLEServer.h>
 #include <BLEHIDDevice.h>
+#include "HidCore.h"
 
 class BleGamepad : public BLEServerCallbacks {
 public:
@@ -13,6 +14,12 @@ public:
   void begin();
   void end();
   bool isConnected() const;
+  HidStatus lastError() const;
+  void clearError();
+  void setLogging(bool enabled);
+  void setReportDelay(uint32_t delayMs);
+  void setSecurityEnabled(bool enabled);
+  void setAdvertisingInterval(uint16_t minInterval, uint16_t maxInterval);
   void press(uint8_t button);
   void release(uint8_t button);
   void releaseAll();
@@ -30,7 +37,7 @@ protected:
   void onDisconnect(BLEServer*) override;
 
 private:
-  struct Report {
+  struct __attribute__((packed)) Report {
     uint16_t buttons;
     uint8_t hat;
     int16_t x, y, z, rx, ry, rz;
@@ -40,6 +47,6 @@ private:
   BLEAdvertising* advertising = nullptr;
   std::string name, manufacturer;
   uint8_t battery;
-  volatile bool connected = false;
+  HidCore core;
   void notify();
 };
